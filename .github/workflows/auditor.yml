@@ -1,0 +1,109 @@
+name: Auditor Sonnet 4.6 (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      sensitive_files_path:
+        required: true
+        type: string
+        description: "Path to sensitive-files.yml in the consumer repo"
+      max_cost_usd:
+        required: false
+        type: number
+        default: 0.10
+        description: "Hard cap per PR in USD"
+      orchestration_ref:
+        required: false
+        type: string
+        default: "main"
+        description: "Branch/tag of flora-ai-orchestration to use"
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    outputs:
+      verdict: ${{ steps.audit.outputs.verdict }}
+      risk: ${{ steps.audit.outputs.risk }}
+    steps:
+      - name: Checkout consumer repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout orchestration template
+        uses: actions/checkout@v4
+        with:
+          repository: FloemaIndustria/flora-ai-orchestration
+          ref: ${{ inputs.orchestration_ref }}
+          path: .orchestration
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -r .orchestration/scripts/requirements.txt
+
+      - name: Get PR diff and metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} > diff.txt
+          gh pr view ${{ github.event.pull_request.number }} \
+            --json title,body,additions,deletions,changedFiles,author \
+            > pr_meta.json
+
+      - name: Run auditor
+        id: audit
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python .orchestration/scripts/call_auditor.py \
+            --diff diff.txt \
+            --pr-meta pr_meta.json \
+            --sensitive ${{ inputs.sensitive_files_path }} \
+            --prompt .orchestration/prompts/auditor-system.md \
+            --max-cost-usd ${{ inputs.max_cost_usd }} \
+            --output verdict.json \
+            --comment-output comment.md
+
+      - name: Post verdict comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} -F comment.md
+
+      - name: Apply review (approve)
+        if: steps.audit.outputs.verdict == 'approve'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review ${{ github.event.pull_request.number }} --approve \
+            --body "Auto-approved by Sonnet 4.6 auditor."
+
+      - name: Apply review (request changes)
+        if: steps.audit.outputs.verdict == 'request_changes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review ${{ github.event.pull_request.number }} --request-changes \
+            --body "Changes requested by Sonnet 4.6 auditor. See verdict comment above."
+
+      - name: Upload verdict artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auditor-verdict
+          path: |
+            verdict.json
+            comment.md
+          retention-days: 30
