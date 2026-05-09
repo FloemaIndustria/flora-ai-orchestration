@@ -1,0 +1,52 @@
+# sensitive-files.yml — TEMPLATE
+# Copie este arquivo para .github/sensitive-files.yml no repo consumidor e ajuste paths.
+#
+# Categorias:
+#   critical: arquivos cuja modificação SEMPRE dispara needs_human (risco crítico).
+#   high: arquivos que disparam needs_human (risco alto).
+#   medium: arquivos sob escrutínio mas decididos pelo Sonnet.
+#   forbidden_paths: paths que NÃO podem ser modificados (segredos, banco, etc).
+#
+# Glob patterns suportados (fnmatch):
+#   "agent.py"        → exact match
+#   "**/migrations/*" → any depth migrations
+#   "prompts/*.md"    → all md in prompts/
+#
+# Flags especiais (booleanas):
+#   frente_b_blocked: true  → bloqueia paths em frente_b_paths
+#   production_blocked: true → qualquer mention de "produção" → needs_human
+#   deploy_blocked: true    → workflows de deploy precisam aprovação WhatsApp
+
+critical:
+  - .github/workflows/*.yml
+  - .env*
+  - secrets/*
+
+high:
+  - "**/migrations/*.py"
+  - "**/models.py"
+  - settings.py
+
+medium: []
+
+forbidden_paths:
+  - .env
+  - "*.sqlite3"
+  - "*.db"
+  - secrets/
+
+# Específico para flora-2.0 (descomente e ajuste se aplicável)
+# frente_b_blocked: true
+# frente_b_paths:
+#   - agent.py
+#   - prompt.py
+#   - dspy_optimizer/**
+#   - prompts/**
+# frente_a_paths:
+#   - sankhya/**
+
+# Específico para mrp-floema (descomente se aplicável)
+# deploy_blocked: true
+
+# Específico para flora-dspy-lab (descomente se aplicável)
+# production_blocked: true
