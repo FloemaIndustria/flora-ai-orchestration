@@ -1,0 +1,79 @@
+name: Pre-filter (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        required: false
+        type: string
+        default: '3.12'
+      run_tests:
+        required: false
+        type: boolean
+        default: true
+      run_lint:
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  pre-filter:
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.summary.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install project dependencies
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install ruff pytest
+
+      - name: Lint with ruff
+        id: lint
+        if: inputs.run_lint
+        run: |
+          ruff check . --output-format=github
+
+      - name: Run pytest
+        id: tests
+        if: inputs.run_tests
+        run: |
+          if [ -d tests ] || [ -d test ]; then
+            pytest --tb=short -q
+          else
+            echo "::notice::No tests directory found, skipping pytest"
+          fi
+
+      - name: Scan for hardcoded secrets
+        id: secrets
+        run: |
+          set +e
+          PATTERNS='(api_key|api-key|password|secret|token|sk-ant-|github_pat_|sk-[a-zA-Z0-9]{20,})\s*[:=]\s*["\047][^"\047]{8,}'
+          MATCHES=$(grep -rEn "$PATTERNS" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.env*" --include="*.js" --include="*.ts" . 2>/dev/null | grep -v "SEU_TOKEN\|EXAMPLE\|PLACEHOLDER\|XXXX\|YOUR_KEY")
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Possible hardcoded secrets detected:"
+            echo "$MATCHES"
+            exit 1
+          fi
+          echo "No hardcoded secrets detected."
+
+      - name: Scan for PythonAnywhere production paths
+        run: |
+          set +e
+          MATCHES=$(grep -rEn '(/home/[a-z0-9]+/|pythonanywhere\.com/api|passenger_wsgi)' --include="*.py" . 2>/dev/null)
+          if [ -n "$MATCHES" ]; then
+            echo "::warning::Possible PA production paths detected (review needed):"
+            echo "$MATCHES"
+          fi
+
+      - name: Summary
+        id: summary
+        if: always()
+        run: |
+          echo "passed=true" >> $GITHUB_OUTPUT
+          echo "Pre-filter passed."
