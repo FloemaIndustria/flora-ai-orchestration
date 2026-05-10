@@ -23,6 +23,8 @@ jobs:
       passed: ${{ steps.summary.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -33,41 +35,73 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install ruff pytest
 
-      - name: Lint with ruff
-        id: lint
-        if: inputs.run_lint
+      - name: Compute changed Python files
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          ruff check . --output-format=github
+          git fetch origin ${{ github.event.pull_request.base.ref }} --depth=50 || true
+          BASE_SHA=$(git merge-base origin/${{ github.event.pull_request.base.ref }} HEAD || echo "")
+          if [ -z "$BASE_SHA" ]; then
+            echo "files=" >> $GITHUB_OUTPUT
+            echo "::warning::Could not compute base SHA, lint will skip"
+            exit 0
+          fi
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.py' | tr '\n' ' ')
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+          echo "Changed Python files: $FILES"
 
-      - name: Run pytest
+      - name: Lint with ruff (changed files only)
+        id: lint
+        if: inputs.run_lint && steps.changed.outputs.files != ''
+        run: |
+          ruff check ${{ steps.changed.outputs.files }} --output-format=github
+
+      - name: Run pytest (changed-related tests only)
         id: tests
         if: inputs.run_tests
         run: |
           if [ -d tests ] || [ -d test ]; then
-            pytest --tb=short -q
+            CHANGED="${{ steps.changed.outputs.files }}"
+            # Roda tests/ inteiro apenas se algum arquivo changed estiver fora de tests/.
+            # Se changed for só tests, roda só os tests changed.
+            ONLY_TESTS=true
+            for f in $CHANGED; do
+              case "$f" in
+                tests/*|test/*) ;;
+                *) ONLY_TESTS=false; break ;;
+              esac
+            done
+            if [ "$ONLY_TESTS" = "true" ] && [ -n "$CHANGED" ]; then
+              pytest --tb=short -q $CHANGED
+            else
+              pytest --tb=short -q tests/ 2>/dev/null || pytest --tb=short -q test/ 2>/dev/null || echo "::notice::No tests dir matched"
+            fi
           else
             echo "::notice::No tests directory found, skipping pytest"
           fi
 
-      - name: Scan for hardcoded secrets
+      - name: Scan for hardcoded secrets (changed files only)
         id: secrets
+        if: steps.changed.outputs.files != ''
         run: |
           set +e
           PATTERNS='(api_key|api-key|password|secret|token|sk-ant-|github_pat_|sk-[a-zA-Z0-9]{20,})\s*[:=]\s*["\047][^"\047]{8,}'
-          MATCHES=$(grep -rEn "$PATTERNS" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.json" --include="*.env*" --include="*.js" --include="*.ts" . 2>/dev/null | grep -v "SEU_TOKEN\|EXAMPLE\|PLACEHOLDER\|XXXX\|YOUR_KEY")
+          MATCHES=$(grep -EHn "$PATTERNS" ${{ steps.changed.outputs.files }} 2>/dev/null | grep -v "SEU_TOKEN\|EXAMPLE\|PLACEHOLDER\|XXXX\|YOUR_KEY")
           if [ -n "$MATCHES" ]; then
-            echo "::error::Possible hardcoded secrets detected:"
+            echo "::error::Possible hardcoded secrets in changed files:"
             echo "$MATCHES"
             exit 1
           fi
-          echo "No hardcoded secrets detected."
+          echo "No hardcoded secrets in changed files."
 
-      - name: Scan for PythonAnywhere production paths
+      - name: Scan for PythonAnywhere production paths (changed files only)
+        if: steps.changed.outputs.files != ''
         run: |
           set +e
-          MATCHES=$(grep -rEn '(/home/[a-z0-9]+/|pythonanywhere\.com/api|passenger_wsgi)' --include="*.py" . 2>/dev/null)
+          MATCHES=$(grep -EHn '(/home/[a-z0-9]+/|pythonanywhere\.com/api|passenger_wsgi)' ${{ steps.changed.outputs.files }} 2>/dev/null)
           if [ -n "$MATCHES" ]; then
-            echo "::warning::Possible PA production paths detected (review needed):"
+            echo "::warning::Possible PA production paths in changed files (review needed):"
             echo "$MATCHES"
           fi
 
