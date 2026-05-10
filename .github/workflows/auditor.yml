@@ -85,19 +85,23 @@ jobs:
 
       - name: Apply review (approve)
         if: steps.audit.outputs.verdict == 'approve'
+        continue-on-error: true   # GitHub bloqueia self-review (autor == actor); verdict comment é suficiente
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr review ${{ github.event.pull_request.number }} --approve \
-            --body "Auto-approved by Sonnet 4.6 auditor."
+            --body "Auto-approved by Sonnet 4.6 auditor." || \
+          echo "::notice::Self-review bloqueado pelo GitHub (autor==github-actions[bot]). Verdict comment acima vale como aprovação."
 
       - name: Apply review (request changes)
         if: steps.audit.outputs.verdict == 'request_changes'
+        continue-on-error: true   # mesmo motivo: self-review bloqueio
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr review ${{ github.event.pull_request.number }} --request-changes \
-            --body "Changes requested by Sonnet 4.6 auditor. See verdict comment above."
+            --body "Changes requested by Sonnet 4.6 auditor. See verdict comment above." || \
+          echo "::notice::Self-review bloqueado pelo GitHub (autor==github-actions[bot]). Verdict comment acima sinaliza changes requested."
 
       - name: Upload verdict artifact
         uses: actions/upload-artifact@v4
