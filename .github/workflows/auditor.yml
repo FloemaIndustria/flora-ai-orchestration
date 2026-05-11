@@ -20,6 +20,16 @@ on:
     secrets:
       ANTHROPIC_API_KEY:
         required: true
+      ZAPI_INSTANCE_ID:
+        required: false
+      ZAPI_INSTANCE_TOKEN:
+        required: false
+      ZAPI_CLIENT_TOKEN:
+        required: false
+      WHATSAPP_NOTIFY_TO:
+        required: false
+      WHATSAPP_NOTIFY_ENABLED:
+        required: false
 
 jobs:
   audit:
@@ -102,6 +112,27 @@ jobs:
           gh pr review ${{ github.event.pull_request.number }} --request-changes \
             --body "Changes requested by Sonnet 4.6 auditor. See verdict comment above." || \
           echo "::notice::Self-review bloqueado pelo GitHub (autor==github-actions[bot]). Verdict comment acima sinaliza changes requested."
+
+      - name: Notify WhatsApp on needs_human
+        if: steps.audit.outputs.verdict == 'needs_human'
+        continue-on-error: true   # best-effort: nunca bloqueia auditor
+        env:
+          WHATSAPP_NOTIFY_ENABLED: ${{ secrets.WHATSAPP_NOTIFY_ENABLED }}
+          ZAPI_INSTANCE_ID: ${{ secrets.ZAPI_INSTANCE_ID }}
+          ZAPI_TOKEN: ${{ secrets.ZAPI_INSTANCE_TOKEN }}
+          ZAPI_CLIENT_TOKEN: ${{ secrets.ZAPI_CLIENT_TOKEN }}
+          WHATSAPP_NOTIFY_TO: ${{ secrets.WHATSAPP_NOTIFY_TO }}
+        run: |
+          PR_TITLE=$(python3 -c "import json; print(json.load(open('pr_meta.json'))['title'])")
+          python3 .orchestration/scripts/whatsapp_notify.py \
+            --repo "${{ github.repository }}" \
+            --workflow "Auditor Sonnet 4.6" \
+            --conclusion "needs_human" \
+            --branch "${{ github.head_ref }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --verdict-json verdict.json \
+            --pr-number "${{ github.event.pull_request.number }}" \
+            --pr-title "$PR_TITLE"
 
       - name: Upload verdict artifact
         uses: actions/upload-artifact@v4
